@@ -1,4 +1,4 @@
-
+-- Bogi Napoleon Wennerstrøm (bwenne16@student.aau.dk)
 module Huffman
 ( 
     compress,

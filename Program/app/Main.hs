@@ -1,3 +1,4 @@
+-- Bogi Napoleon Wennerstrøm (bwenne16@student.aau.dk)
 module Main where
 
 import System.Environment
