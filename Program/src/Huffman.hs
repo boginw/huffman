@@ -11,8 +11,6 @@ module Huffman
 import qualified Data.Map as Map
 import Data.Maybe
 import Data.List
-import qualified Data.Sequence as Seq
-import qualified Data.Foldable as Fold
 import Data.Word
 
 type PrefixEntry t = (t, [Word8])
@@ -36,40 +34,38 @@ nodeVal (Node v _ _) = v
 -- | Determines if a tree is a leaf node
 isLeaf :: Tree a -> Bool
 isLeaf Leaf = True
+isLeaf (Node _ _ _) = False
+
+-- | From a prefix creates a predicate function which determines if
+-- | a given prefix entry's prefix starts with the first prefix
+startsWith :: [Word8] -> PrefixEntry t -> Bool
+startsWith prefix = (\entry -> prefix `isPrefixOf` (snd entry))
 
 -- | From a list, this function counts the occurences of each unique
 -- | item in said list and returns a list of pairs of the occurence
 -- | how many times it appeared 
 frequencyList :: (Num a, Ord k) => [k] -> [(k, a)]
-frequencyList list = 
-    Map.toList (aux list Map.empty)
-    where
-        aux [] m = m 
-        aux (s:sx) m =
-            let
-                f = Map.lookup s m
-            in
-                if isNothing f then
-                    aux sx (Map.insert s 1 m)
-                else
-                    aux sx (Map.insert s (fromJust f + 1) m)
+frequencyList list = map (\a -> (head a, fromIntegral (length a))) (group (sort list))
+
+-- | From a list of nodes this function merges the first two nodes 
+-- | together creating a new node where the leafs of the new node 
+-- | is the two nodes that are being merged.
+mergeTwoFirst :: [Tree [a]] -> [Tree [a]]
+mergeTwoFirst (n1:n2:rest) =
+    let
+        v1 = nodeVal n1
+        v2 = nodeVal n2
+        sum = (snd v1) + (snd v2)
+        bits = (fst v1) ++ (fst v2)
+    in
+        (Node (bits, sum) n1 n2) : rest
 
 -- | From a list of nodes merges the two nodes with the lowest integer
 -- | values, and creates a new node where the leafs of the new node is the
 -- | two nodes that are being merged.
 mergeTwoLowest :: [Tree [a]] -> [Tree [a]]
-mergeTwoLowest flt = 
-    let
-        srt = sortBy (\(Node (_, a) _ _) (Node (_, b) _ _) -> compare a b) flt
-        node1 = head srt
-        node2 = head (tail srt)
-        node1Val = nodeVal node1
-        node2Val = nodeVal node2
-        nodeSum = (snd node1Val) + (snd node2Val)
-        nodeBits = (fst node1Val) ++ (fst node2Val)
-        rest = (tail (tail srt))
-    in
-        (Node (nodeBits, nodeSum) node1 node2) : rest
+mergeTwoLowest flt = mergeTwoFirst (sortBy comparator flt)
+    where comparator = \(Node (_, a) _ _) (Node (_, b) _ _) -> compare a b
 
 -- | From a list of trees, this function merges all the nodes together
 -- | to a single node, always merging the two nodes with the lowest
@@ -84,16 +80,16 @@ buildTree flt = buildTree (mergeTwoLowest flt)
 collapseTree :: Tree [a] -> PrefixTable a
 collapseTree tree =
     let 
-        aux Leaf p = []
-        aux (Node v Leaf Leaf) p = [((head (fst v)), p)]
-        aux (Node _ a b) p = 
+        visit Leaf p = []
+        visit (Node v Leaf Leaf) p = [((head (fst v)), p)]
+        visit (Node _ a b) p = 
             let 
-                n1 = aux a (p ++ left)
-                n2 = aux b (p ++ right)
+                n1 = visit a (p ++ left)
+                n2 = visit b (p ++ right)
             in
                 n1 ++ n2
     in
-        aux tree []
+        visit tree []
 
 -- | Compress a sequence of ordinals using Huffman's compression
 -- | technique. The returning pair consists of the compressed payload
@@ -106,38 +102,21 @@ compress payload =
         tree = buildTree treeNodes
         prefixes = collapseTree tree
         prefixMap = Map.fromList prefixes
-        aux l res =
-            if (length l == 0) then res
-            else aux t (res Seq.>< found)
-            where 
-                h = l `Seq.index` 0
-                t = Seq.drop 1 l
-                found = Seq.fromList (fromJust (Map.lookup h prefixMap))
+        replaceWithPrefixes [] res = res
+        replaceWithPrefixes (s:sx) res = replaceWithPrefixes sx (res ++ prefix)
+            where prefix = fromJust (Map.lookup s prefixMap)
     in
-        (
-            --(aux (Seq.fromList (reverse s)) Seq.empty), 
-            --Seq.fromList (map (\(a, p) -> (a, Seq.fromList p)) prefixes)
-            Fold.toList (aux (Seq.fromList payload) Seq.empty), 
-            prefixes
-        )
+        (replaceWithPrefixes payload [], prefixes)
 
 -- | Decompress a Huffman compressed payload
 decompress :: HuffmanCoding t -> [t]
-decompress (b, d) =
+decompress (payload, prefixes) =
     let
-        inv = Map.fromList(map (\(a, b) -> (b, a)) d)
-        aux [] [] res = res
-        aux [] i res = 
-            res ++ if (isJust found) then [fromJust found] else []
-            where 
-                found = Map.lookup i inv
-        aux (s:sx) i res = 
-            let
-                r = Map.lookup i inv
-            in
-                if (isJust r) then aux (s:sx) [] (res ++ [(fromJust r)])
-                                else aux sx (i++[s]) res
+        replacePrefixes ([], (p:[])) _ = [fst p]
+        replacePrefixes ([], _) _ = []
+        replacePrefixes (payload, (p:[])) _ = (fst p) : (replacePrefixes (payload, prefixes) [])
+        replacePrefixes ((s:sx), prefixes) word = 
+            let word' = word ++ [s]
+            in replacePrefixes (sx, (filter (startsWith word') prefixes)) word'
     in
-        aux b [] []
-
-
+        replacePrefixes (payload, prefixes) []
